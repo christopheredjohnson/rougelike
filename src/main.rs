@@ -1,6 +1,12 @@
 use bevy::color::palettes::css;
 use bevy::prelude::*;
-use bevy::sprite::{Material2dPlugin, MaterialMesh2dBundle, Mesh2dHandle};
+use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use bevy_rapier2d::prelude::*;
+
+use crate::class::{ClassStats, PlayerClass};
+
+mod class;
 
 fn main() {
     App::new()
@@ -12,8 +18,22 @@ fn main() {
             }),
             ..default()
         }))
+        
+        .add_plugins((
+            WorldInspectorPlugin::default(),
+            RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0),
+            RapierDebugRenderPlugin::default(),
+        ))
         .add_systems(Startup, setup)
-        .add_systems(Update, (player_movement, player_shoot, projectile_movement, camera_follow))
+        .add_systems(
+            Update,
+            (
+                player_movement,
+                player_shoot,
+                projectile_movement,
+                camera_follow,
+            ),
+        )
         .run();
 }
 
@@ -27,6 +47,11 @@ struct Projectile;
 #[derive(Component)]
 struct Velocity(Vec2);
 
+#[derive(Component)]
+struct AttackTimer {
+    timer: Timer,
+}
+
 // === Setup ===
 fn setup(
     mut commands: Commands,
@@ -34,6 +59,29 @@ fn setup(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     commands.spawn(Camera2dBundle::default());
+
+    let chosen_class = PlayerClass::default();
+
+    let stats = match chosen_class {
+        PlayerClass::Paladin => ClassStats {
+            class: PlayerClass::Paladin,
+            health: 150.0,
+            move_speed: 150.0,
+            attack_cooldown: 1.0,
+        },
+        PlayerClass::Archer => ClassStats {
+            class: PlayerClass::Archer,
+            health: 100.0,
+            move_speed: 200.0,
+            attack_cooldown: 0.5,
+        },
+        PlayerClass::Mage => ClassStats {
+            class: PlayerClass::Mage,
+            health: 80.0,
+            move_speed: 180.0,
+            attack_cooldown: 0.8,
+        },
+    };
 
     // Create a 32x32 green rectangle for the player
     let player_mesh = meshes.add(Mesh::from(Rectangle::new(32.0, 32.0)));
@@ -47,16 +95,20 @@ fn setup(
             ..default()
         },
         Player,
+        AttackTimer {
+            timer: Timer::from_seconds(stats.attack_cooldown, TimerMode::Repeating),
+        },
+        stats,
     ));
 }
 
 // === Movement ===
 fn player_movement(
     keys: Res<ButtonInput<KeyCode>>,
-    mut query: Query<&mut Transform, With<Player>>,
+    mut query: Query<(&mut Transform, &ClassStats), With<Player>>,
     time: Res<Time>,
 ) {
-    let mut transform = query.single_mut();
+    let (mut transform, stats) = query.single_mut();
     let mut direction = Vec2::ZERO;
 
     if keys.pressed(KeyCode::KeyW) {
@@ -74,24 +126,29 @@ fn player_movement(
 
     if direction.length_squared() > 0.0 {
         direction = direction.normalize();
-        transform.translation += (direction * 200.0 * time.delta_seconds()).extend(0.0);
+        transform.translation += (direction * stats.move_speed * time.delta_seconds()).extend(0.0);
     }
 }
 
-// === Shooting ===
 fn player_shoot(
     mut commands: Commands,
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
-    player_q: Query<&Transform, With<Player>>,
+    mut player_q: Query<(&Transform, &ClassStats, &mut AttackTimer), With<Player>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    time: Res<Time>,
 ) {
-    if buttons.just_pressed(MouseButton::Left) {
-        let (camera, cam_transform) = camera_q.single();
-        let window = windows.single();
+    let (camera, cam_transform) = camera_q.single();
+    let window = windows.single();
 
+    let (player_transform, stats, mut attack_timer) = player_q.single_mut();
+
+    // Tick the timer
+    attack_timer.timer.tick(time.delta());
+
+    if buttons.pressed(MouseButton::Left) && attack_timer.timer.finished() {
         if let Some(cursor_pos) = window.cursor_position() {
             let cursor_world = camera
                 .viewport_to_world(cam_transform, cursor_pos)
@@ -99,12 +156,12 @@ fn player_shoot(
                 .origin
                 .truncate();
 
-            let player_pos = player_q.single().translation.truncate();
+            let player_pos = player_transform.translation.truncate();
             let direction = (cursor_world - player_pos).normalize();
 
-            // Create a small red projectile (10x10)
+            // Create a small projectile (10x10)
             let proj_mesh = meshes.add(Mesh::from(Rectangle::new(10.0, 10.0)));
-            let proj_material = materials.add(ColorMaterial::from(Color::rgb(1.0, 0.0, 0.0)));
+            let proj_material = materials.add(ColorMaterial::from(Color::from(css::ORANGE_RED)));
 
             commands.spawn((
                 MaterialMesh2dBundle {
