@@ -10,20 +10,28 @@ mod class;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Hammerwatch-like".into(),
-                resolution: (800., 600.).into(),
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Hammerwatch-like".into(),
+                        resolution: (800., 600.).into(),
+                        cursor: bevy::window::Cursor {
+                            visible: false, // Hide the default cursor
+                            ..default()
+                        },
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(ImagePlugin::default_nearest()),
+        )
         .add_plugins((
             WorldInspectorPlugin::default(),
             RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0),
-            RapierDebugRenderPlugin::default(),
+            // RapierDebugRenderPlugin::default(),
         ))
-        .add_systems(Startup, (setup, load_projectile_assets))
+        .add_systems(Startup, (setup, load_projectile_assets, setup_crosshair))
         .add_systems(
             Update,
             (
@@ -33,6 +41,9 @@ fn main() {
                 hit_enemy,
                 melee_despawn,
                 camera_follow,
+                animate_projectiles,
+                rotate_toward_mouse,
+                update_crosshair,
             ),
         )
         .run();
@@ -62,12 +73,22 @@ struct Enemy;
 #[derive(Component)]
 struct Health {
     current: f32,
+    max: f32,
 }
+
+#[derive(Component)]
+struct Crosshair;
 
 #[derive(Resource)]
 struct ProjectileAssets {
-    texture: Handle<Image>,
-    layout: Handle<TextureAtlasLayout>,
+    fireball_texture: Handle<Image>,
+    fireball_layout: Handle<TextureAtlasLayout>,
+    arrow_texture: Handle<Image>,
+}
+
+#[derive(Component)]
+struct AnimatedProjectile {
+    timer: Timer,
 }
 
 fn load_projectile_assets(
@@ -75,16 +96,76 @@ fn load_projectile_assets(
     asset_server: Res<AssetServer>,
     mut layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
-    let texture = asset_server.load("Magic(Projectile)/Wizard-Attack02_Effect.png");
+    let fireball_texture: Handle<Image> =
+        asset_server.load("Magic(Projectile)/Wizard-Attack02_Effect.png");
+    let arrow_texture: Handle<Image> = asset_server.load("Arrow(Projectile)/Arrow01(100x100).png");
 
     // 7 columns, 1 row, each 100x100 pixels
     let layout = TextureAtlasLayout::from_grid(UVec2::splat(100), 7, 1, None, None);
-    let layout_handle = layouts.add(layout);
+    let fireball_layout = layouts.add(layout);
 
     commands.insert_resource(ProjectileAssets {
-        texture,
-        layout: layout_handle,
+        fireball_texture: fireball_texture,
+        fireball_layout: fireball_layout,
+        arrow_texture: arrow_texture,
     });
+}
+
+fn setup_crosshair(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    // Create crosshair made of two rectangles (horizontal and vertical lines)
+    let crosshair_material = materials.add(ColorMaterial::from(Color::srgba(1.0, 1.0, 1.0, 0.8)));
+
+    // Horizontal line
+    let horizontal_mesh = meshes.add(Mesh::from(Rectangle::new(20.0, 2.0)));
+    // Vertical line
+    let vertical_mesh = meshes.add(Mesh::from(Rectangle::new(2.0, 20.0)));
+
+    commands.spawn((
+        MaterialMesh2dBundle {
+            mesh: Mesh2dHandle(horizontal_mesh),
+            material: crosshair_material.clone(),
+            transform: Transform::from_xyz(0.0, 0.0, 10.0), // High z-index to render on top
+            ..default()
+        },
+        Crosshair,
+    ));
+
+    commands.spawn((
+        MaterialMesh2dBundle {
+            mesh: Mesh2dHandle(vertical_mesh),
+            material: crosshair_material,
+            transform: Transform::from_xyz(0.0, 0.0, 10.0), // High z-index to render on top
+            ..default()
+        },
+        Crosshair,
+    ));
+}
+
+fn update_crosshair(
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform)>,
+    mut crosshair_q: Query<&mut Transform, With<Crosshair>>,
+) {
+    let window = windows.single();
+    let (camera, camera_transform) = camera_q.single();
+
+    let Some(cursor_pos) = window.cursor_position() else {
+        return;
+    };
+    let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos) else {
+        return;
+    };
+    let world_pos = ray.origin.truncate();
+
+    // Update all crosshair components to follow the mouse
+    for mut transform in &mut crosshair_q {
+        transform.translation.x = world_pos.x;
+        transform.translation.y = world_pos.y;
+    }
 }
 
 // === Setup ===
@@ -156,7 +237,10 @@ fn setup(
                 ..default()
             },
             Enemy,
-            Health { current: 3.0 },
+            Health {
+                current: 3.0,
+                max: 3.0,
+            },
             RigidBody::Fixed,
             Collider::cuboid(14.0, 14.0),
             CollisionGroups::new(Group::GROUP_3, Group::ALL), // Enemies in group 3
@@ -198,9 +282,8 @@ fn player_attack(
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     mut player_q: Query<(&Transform, &ClassStats, &mut AttackTimer), With<Player>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
     time: Res<Time>,
+    projectile_assets: Res<ProjectileAssets>,
 ) {
     let (camera, cam_transform) = camera_q.single();
     let window = windows.single();
@@ -226,17 +309,41 @@ fn player_attack(
     let direction = (cursor_world - player_pos).normalize();
 
     match stats.class {
-        PlayerClass::Archer | PlayerClass::Mage => {
-            // Ranged Projectile
-            let proj_mesh = meshes.add(Mesh::from(Rectangle::new(10.0, 10.0)));
-            let proj_material = materials.add(ColorMaterial::from(Color::from(css::ORANGE_RED)));
+        PlayerClass::Mage => {
             let spawn_pos = player_pos + direction * 20.0;
 
             commands.spawn((
-                MaterialMesh2dBundle {
-                    mesh: Mesh2dHandle(proj_mesh),
-                    material: proj_material,
+                TextureAtlas {
+                    layout: projectile_assets.fireball_layout.clone(),
+                    index: 0,
+                },
+                SpriteBundle {
+                    texture: projectile_assets.fireball_texture.clone(),
                     transform: Transform::from_translation(spawn_pos.extend(1.0)),
+                    ..default()
+                },
+                AnimatedProjectile {
+                    timer: Timer::from_seconds(0.1, TimerMode::Repeating),
+                },
+                Projectile,
+                RigidBody::Dynamic,
+                Collider::ball(5.0),
+                Velocity::linear(direction * 400.0),
+                Sleeping::disabled(),
+                GravityScale(0.0),
+                CollisionGroups::new(Group::GROUP_2, Group::GROUP_3),
+                ActiveEvents::COLLISION_EVENTS,
+            ));
+        }
+        PlayerClass::Archer => {
+            let spawn_pos = player_pos + direction * 20.0;
+            let angle = direction.y.atan2(direction.x);
+
+            commands.spawn((
+                SpriteBundle {
+                    texture: projectile_assets.arrow_texture.clone(),
+                    transform: Transform::from_translation(spawn_pos.extend(1.0))
+                        .with_rotation(Quat::from_rotation_z(angle)),
                     ..default()
                 },
                 Projectile,
@@ -343,5 +450,42 @@ fn melee_despawn(
         if lifetime.0.finished() {
             commands.entity(entity).despawn();
         }
+    }
+}
+
+fn animate_projectiles(
+    time: Res<Time>,
+    mut query: Query<(&mut TextureAtlas, &mut AnimatedProjectile)>,
+) {
+    for (mut atlas, mut anim) in &mut query {
+        anim.timer.tick(time.delta());
+        if anim.timer.just_finished() {
+            atlas.index = (atlas.index + 1) % 7;
+        }
+    }
+}
+
+fn rotate_toward_mouse(
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform)>,
+    mut query: Query<&mut Transform, With<Player>>, // or With<Projectile> etc.
+) {
+    let window = windows.single();
+    let (camera, camera_transform) = camera_q.single();
+
+    let Some(cursor_pos) = window.cursor_position() else {
+        return;
+    };
+    let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos) else {
+        return;
+    };
+    let target = ray.origin.truncate();
+
+    for mut transform in &mut query {
+        let position = transform.translation.truncate();
+        let direction = target - position;
+        let angle = direction.y.atan2(direction.x); // angle in radians
+
+        transform.rotation = Quat::from_rotation_z(angle);
     }
 }

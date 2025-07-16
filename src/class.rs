@@ -2,10 +2,10 @@ use bevy::prelude::*;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum PlayerClass {
-        #[default]
     Paladin,
-
+    #[default]
     Archer,
+
     Mage,
 }
 
