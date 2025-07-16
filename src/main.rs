@@ -29,7 +29,7 @@ fn main() {
         .add_plugins((
             WorldInspectorPlugin::default(),
             RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0),
-            // RapierDebugRenderPlugin::default(),
+            RapierDebugRenderPlugin::default(),
         ))
         .add_systems(Startup, (setup, load_projectile_assets, setup_crosshair))
         .add_systems(
@@ -37,8 +37,11 @@ fn main() {
             (
                 player_movement,
                 player_attack,
+                enemy_ai_system,
+                enemy_attack_system,
                 projectile_despawn,
                 hit_enemy,
+                hit_player,
                 melee_despawn,
                 camera_follow,
                 animate_projectiles,
@@ -57,7 +60,13 @@ struct Player;
 struct Projectile;
 
 #[derive(Component)]
+struct EnemyProjectile;
+
+#[derive(Component)]
 struct MeleeAttack;
+
+#[derive(Component)]
+struct EnemyMeleeAttack;
 
 #[derive(Component)]
 struct MeleeLifetime(Timer);
@@ -69,6 +78,27 @@ struct AttackTimer {
 
 #[derive(Component)]
 struct Enemy;
+
+#[derive(Component)]
+struct EnemyAI {
+    detection_range: f32,
+    attack_range: f32,
+    move_speed: f32,
+    attack_cooldown: f32,
+    last_attack: f32,
+}
+
+impl Default for EnemyAI {
+    fn default() -> Self {
+        Self {
+            detection_range: 200.0,
+            attack_range: 60.0,
+            move_speed: 75.0,
+            attack_cooldown: 2.0,
+            last_attack: 0.0,
+        }
+    }
+}
 
 #[derive(Component)]
 struct Health {
@@ -215,6 +245,10 @@ fn setup(
             timer: Timer::from_seconds(stats.attack_cooldown, TimerMode::Repeating),
         },
         stats,
+        Health {
+            current: 100.0,
+            max: 100.0,
+        },
         RigidBody::Dynamic,
         Collider::cuboid(16.0, 16.0),
         Velocity::zero(),
@@ -237,14 +271,112 @@ fn setup(
                 ..default()
             },
             Enemy,
+            EnemyAI::default(),
             Health {
                 current: 3.0,
                 max: 3.0,
             },
-            RigidBody::Fixed,
+            RigidBody::Dynamic,
             Collider::cuboid(14.0, 14.0),
+            Velocity::zero(),
+            GravityScale(0.0),
             CollisionGroups::new(Group::GROUP_3, Group::ALL), // Enemies in group 3
         ));
+    }
+}
+
+// === AI System ===
+fn enemy_ai_system(
+    mut enemy_query: Query<(&mut Transform, &mut Velocity, &mut EnemyAI), With<Enemy>>,
+    player_query: Query<&Transform, (With<Player>, Without<Enemy>)>,
+    time: Res<Time>,
+) {
+    let Ok(player_transform) = player_query.get_single() else {
+        return;
+    };
+    
+    let player_pos = player_transform.translation.truncate();
+    let current_time = time.elapsed_seconds();
+
+    for (mut enemy_transform, mut enemy_velocity, mut ai) in &mut enemy_query {
+        let enemy_pos = enemy_transform.translation.truncate();
+        let distance_to_player = enemy_pos.distance(player_pos);
+
+        // Check if player is within detection range
+        if distance_to_player <= ai.detection_range {
+            let direction = (player_pos - enemy_pos).normalize();
+            
+            // If player is within attack range, stop moving and prepare to attack
+            if distance_to_player <= ai.attack_range {
+                enemy_velocity.linvel = Vec2::ZERO;
+                
+                // Face the player
+                let angle = direction.y.atan2(direction.x);
+                enemy_transform.rotation = Quat::from_rotation_z(angle);
+            } else {
+                // Move towards player
+                enemy_velocity.linvel = direction * ai.move_speed;
+                
+                // Face movement direction
+                let angle = direction.y.atan2(direction.x);
+                enemy_transform.rotation = Quat::from_rotation_z(angle);
+            }
+        } else {
+            // Player not detected, stop moving
+            enemy_velocity.linvel = Vec2::ZERO;
+        }
+    }
+}
+
+fn enemy_attack_system(
+    mut commands: Commands,
+    mut enemy_query: Query<(&Transform, &mut EnemyAI), With<Enemy>>,
+    player_query: Query<&Transform, (With<Player>, Without<Enemy>)>,
+    time: Res<Time>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    let Ok(player_transform) = player_query.get_single() else {
+        return;
+    };
+    
+    let player_pos = player_transform.translation.truncate();
+    let current_time = time.elapsed_seconds();
+
+    for (enemy_transform, mut ai) in &mut enemy_query {
+        let enemy_pos = enemy_transform.translation.truncate();
+        let distance_to_player = enemy_pos.distance(player_pos);
+
+        // Check if player is within attack range and cooldown is ready
+        if distance_to_player <= ai.attack_range && 
+           current_time - ai.last_attack >= ai.attack_cooldown {
+            
+            let direction = (player_pos - enemy_pos).normalize();
+            let spawn_pos = enemy_pos + direction * 20.0;
+
+            // Create enemy projectile (red fireball)
+            let projectile_mesh = meshes.add(Mesh::from(Circle::new(8.0)));
+            let projectile_material = materials.add(ColorMaterial::from(Color::from(css::RED)));
+
+            commands.spawn((
+                MaterialMesh2dBundle {
+                    mesh: Mesh2dHandle(projectile_mesh),
+                    material: projectile_material,
+                    transform: Transform::from_translation(spawn_pos.extend(1.0)),
+                    ..default()
+                },
+                EnemyProjectile,
+                RigidBody::Dynamic,
+                Collider::ball(8.0),
+                Velocity::linear(direction * 200.0),
+                Sleeping::disabled(),
+                GravityScale(0.0),
+                CollisionGroups::new(Group::GROUP_4, Group::GROUP_1), // Enemy projectiles hit player
+                ActiveEvents::COLLISION_EVENTS,
+            ));
+
+            ai.last_attack = current_time;
+        }
     }
 }
 
@@ -371,6 +503,7 @@ fn player_attack(
                 GravityScale(0.0),
                 Sensor,
                 Velocity::linear(direction * 10.0),
+                CollisionGroups::new(Group::GROUP_2, Group::GROUP_3),
                 ActiveEvents::COLLISION_EVENTS,
                 MeleeLifetime(Timer::from_seconds(0.1, TimerMode::Once)),
             ));
@@ -380,7 +513,7 @@ fn player_attack(
 
 fn projectile_despawn(
     mut commands: Commands,
-    query: Query<(Entity, &Transform), With<Projectile>>,
+    query: Query<(Entity, &Transform), (With<Projectile>, Without<EnemyProjectile>)>,
 ) {
     for (entity, transform) in &query {
         if transform.translation.length() > 2000.0 {
@@ -389,17 +522,7 @@ fn projectile_despawn(
     }
 }
 
-// === Camera Follow ===
-fn camera_follow(
-    player_q: Query<&Transform, (With<Player>, Without<Camera>)>,
-    mut camera_q: Query<&mut Transform, (With<Camera>, Without<Player>)>,
-) {
-    let player_transform = player_q.single();
-    let mut camera_transform = camera_q.single_mut();
-    camera_transform.translation.x = player_transform.translation.x;
-    camera_transform.translation.y = player_transform.translation.y;
-}
-
+// === Combat Systems ===
 fn hit_enemy(
     mut commands: Commands,
     mut collision_events: EventReader<CollisionEvent>,
@@ -438,6 +561,59 @@ fn hit_enemy(
             }
         }
     }
+}
+
+fn hit_player(
+    mut commands: Commands,
+    mut collision_events: EventReader<CollisionEvent>,
+    mut player_query: Query<(Entity, &mut Health), With<Player>>,
+    enemy_projectile_query: Query<Entity, With<EnemyProjectile>>,
+    enemy_melee_query: Query<Entity, With<EnemyMeleeAttack>>,
+) {
+    for event in collision_events.read() {
+        if let CollisionEvent::Started(e1, e2, _) = event {
+            let (maybe_player, maybe_hitbox) = match (
+                player_query.get(*e1).ok().map(|_| *e1),
+                player_query.get(*e2).ok().map(|_| *e2),
+            ) {
+                (Some(player), _)
+                    if enemy_projectile_query.get(*e2).is_ok() || enemy_melee_query.get(*e2).is_ok() =>
+                {
+                    (player, *e2)
+                }
+                (_, Some(player))
+                    if enemy_projectile_query.get(*e1).is_ok() || enemy_melee_query.get(*e1).is_ok() =>
+                {
+                    (player, *e1)
+                }
+                _ => continue,
+            };
+
+            // Despawn enemy projectile or melee hitbox
+            commands.entity(maybe_hitbox).despawn();
+
+            // Damage player
+            if let Ok((_, mut health)) = player_query.get_mut(maybe_player) {
+                health.current -= 10.0;
+                if health.current <= 0.0 {
+                    // Player died - could restart game, show game over screen, etc.
+                    println!("Player died!");
+                    health.current = 0.0;
+                }
+            }
+        }
+    }
+}
+
+// === Camera Follow ===
+fn camera_follow(
+    player_q: Query<&Transform, (With<Player>, Without<Camera>)>,
+    mut camera_q: Query<&mut Transform, (With<Camera>, Without<Player>)>,
+) {
+    let player_transform = player_q.single();
+    let mut camera_transform = camera_q.single_mut();
+    camera_transform.translation.x = player_transform.translation.x;
+    camera_transform.translation.y = player_transform.translation.y;
 }
 
 fn melee_despawn(
