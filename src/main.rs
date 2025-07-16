@@ -371,6 +371,7 @@ fn enemy_attack_system(
                 Velocity::linear(direction * 200.0),
                 Sleeping::disabled(),
                 GravityScale(0.0),
+                Sensor,
                 CollisionGroups::new(Group::GROUP_4, Group::GROUP_1), // Enemy projectiles hit player
                 ActiveEvents::COLLISION_EVENTS,
             ));
