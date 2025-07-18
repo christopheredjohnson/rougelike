@@ -1,19 +1,12 @@
 use bevy::prelude::*;
 
-#[derive(Debug, Clone, Copy, Default)]
-pub enum PlayerClass {
-     #[default]
-    Paladin,
-   
-    Archer,
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub enum PlayerClass {
+    Warrior,
+    Archer,
     Mage,
 }
 
-#[derive(Component)]
-pub struct ClassStats {
-    pub class: PlayerClass,
-    pub health: f32,
-    pub move_speed: f32,
-    pub attack_cooldown: f32,
-}
+#[derive(Resource)]
+pub struct SelectedClass(pub Option<PlayerClass>);
