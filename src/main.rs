@@ -1,13 +1,15 @@
 use bevy::{color::palettes::css, prelude::*};
+use bevy_rapier2d::prelude::*;
 
-use crate::class::{PlayerClass, SelectedClass};
+use crate::player::{Player, PlayerClass, SelectedClass};
 
-mod  class;
-
+mod player;
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
+        .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
+        .add_plugins(RapierDebugRenderPlugin::default())
         .init_state::<AppState>() // Alternatively we could use .insert_state(AppState::Menu)
         .insert_resource(SelectedClass(None))
         .add_systems(Startup, setup)
@@ -20,10 +22,14 @@ fn main() {
         .add_systems(Update, menu.run_if(in_state(AppState::Menu)))
         .add_systems(OnExit(AppState::Menu), cleanup_menu)
         .add_systems(OnEnter(AppState::InGame), setup_game)
-        // .add_systems(
-        //     Update,
-        //     ().run_if(in_state(AppState::InGame)),
-        // )
+        .add_systems(
+            Update,
+            (
+                player::rotate_player_to_mouse,
+                player::player_movement_input,
+            )
+                .run_if(in_state(AppState::InGame)),
+        )
         .run();
 }
 
@@ -107,7 +113,10 @@ fn setup_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
 fn menu(
     mut next_state: ResMut<NextState<AppState>>,
     mut selected_class: ResMut<SelectedClass>,
-    mut interaction_query: Query<(&Interaction, &mut BackgroundColor, &PlayerClass), Changed<Interaction>>,
+    mut interaction_query: Query<
+        (&Interaction, &mut BackgroundColor, &PlayerClass),
+        Changed<Interaction>,
+    >,
 ) {
     for (interaction, mut color, class) in &mut interaction_query {
         match *interaction {
@@ -130,7 +139,11 @@ fn cleanup_menu(mut commands: Commands, menu_data: Res<MenuData>) {
     commands.entity(menu_data.button_entity).despawn_recursive();
 }
 
-fn setup_game(mut commands: Commands,  selected_class: Res<SelectedClass>, asset_server: Res<AssetServer>) {
+fn setup_game(
+    mut commands: Commands,
+    selected_class: Res<SelectedClass>,
+    asset_server: Res<AssetServer>,
+) {
     let Some(class) = selected_class.0 else {
         error!("No class selected!");
         return;
@@ -145,13 +158,24 @@ fn setup_game(mut commands: Commands,  selected_class: Res<SelectedClass>, asset
 
     println!("Spawning player of class: {name}");
 
-    commands.spawn(SpriteBundle {
-        sprite: Sprite {
-            color: Color::from(color),
-            custom_size: Some(Vec2::splat(40.0)),
+    commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: Color::from(color),
+                custom_size: Some(Vec2::splat(40.0)),
+                ..default()
+            },
+            transform: Transform::from_xyz(0., 0., 0.),
             ..default()
         },
-        transform: Transform::from_xyz(0., 0., 0.),
-        ..default()
-    });
+        Player,
+        RigidBody::Dynamic,
+        Collider::ball(20.0),
+        GravityScale(0.0),
+        Velocity::zero(),
+        Damping {
+            linear_damping: 5.0,
+            ..default()
+        },
+    ));
 }
