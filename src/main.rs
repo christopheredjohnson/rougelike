@@ -12,8 +12,8 @@ mod minimap;
 mod menu;
 
 pub const MINIMAP_LAYER: usize = 1;
-pub const MAP_WIDTH: usize = 64;
-pub const MAP_HEIGHT: usize = 64;
+pub const MAP_WIDTH: usize = 24;
+pub const MAP_HEIGHT: usize = 24;
 
 pub const FLOOR_TILE_INDEX: usize = 119;
 pub const WALL_VERTICAL_INDEX: usize = 17; // e.g. │ sprite

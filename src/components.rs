@@ -27,3 +27,9 @@ pub enum PlayerClass {
     Mage,
     Ranger,
 }
+
+#[derive(Component)]
+pub struct Enemy;
+
+#[derive(Component)]
+pub struct Health(pub i32);

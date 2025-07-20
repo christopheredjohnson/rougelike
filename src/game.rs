@@ -17,6 +17,7 @@ impl Plugin for GamePlugin {
                 (
                     player_movement,
                     camera_follow_system,
+                    enemy_random_movement,
                 )
                     .chain()
                     .run_if(in_state(AppState::InGame)),
@@ -150,6 +151,37 @@ fn setup_game(
 
     spawn_minimap_ui_tiles(&mut commands, &asset_server, &rooms);
 
+
+
+
+     // === Spawn Enemies ===
+    let enemy_texture = asset_server.load("monsters.png"); // reuse or use a new texture
+    let enemy_layout = TextureAtlasLayout::from_grid(UVec2::splat(32), 7, 7, None, None);
+    let enemy_atlas = texture_atlas_layouts.add(enemy_layout);
+
+    let mut rng = rand::thread_rng();
+
+    for room in rooms.iter().skip(1) {
+        if rng.gen_bool(0.6) { // ~60% chance to have enemy in this room
+            let (x, y) = room.inner.center();
+            commands.spawn((
+                SpriteBundle {
+                    texture: enemy_texture.clone(),
+                    transform: Transform::from_translation(Vec3::new(x as f32 * 32.0, y as f32 * 32.0, 1.0)),
+                    ..default()
+                },
+                TextureAtlas {
+                    layout: enemy_atlas.clone(),
+                    index: 4, // some enemy sprite
+                },
+                Position { x, y },
+                Enemy,
+                Health(10),
+            ));
+        }
+    }
+
+
     // Spawn player in center of first room
     if let Some(class) = selected_class.0 {
         let texture = asset_server.load("rogues.png");
@@ -262,4 +294,47 @@ fn camera_follow_system(
 
     camera_transform.translation.x = player_pos.x as f32 * 32.0;
     camera_transform.translation.y = player_pos.y as f32 * 32.0;
+}
+
+fn enemy_random_movement(
+    mut param_set: ParamSet<(
+        Query<(&mut Transform, &mut Position), With<Enemy>>,
+        Query<&Position, With<Wall>>,
+    )>,
+    time: Res<Time>,
+    mut timer: Local<Timer>,
+) {
+    if timer.duration().is_zero() {
+        *timer = Timer::from_seconds(1.0, TimerMode::Repeating);
+    }
+
+    if timer.tick(time.delta()).just_finished() {
+        let mut rng = rand::thread_rng();
+
+        // Step 1: Get a vector of all wall positions
+        let wall_positions: Vec<Position> = param_set.p1().iter().copied().collect();
+
+        // Step 2: Now it's safe to use the enemy query mutably
+        for (mut transform, mut pos) in param_set.p0().iter_mut() {
+            let delta = match rng.gen_range(0..4) {
+                0 => (0, 1),
+                1 => (0, -1),
+                2 => (-1, 0),
+                _ => (1, 0),
+            };
+
+            let new_pos = Position {
+                x: pos.x + delta.0,
+                y: pos.y + delta.1,
+            };
+
+            if wall_positions.contains(&new_pos) {
+                continue;
+            }
+
+            pos.x = new_pos.x;
+            pos.y = new_pos.y;
+            transform.translation = Vec3::new(new_pos.x as f32 * 32.0, new_pos.y as f32 * 32.0, 1.0);
+        }
+    }
 }
