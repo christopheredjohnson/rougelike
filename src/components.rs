@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 
-
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RoomId(pub usize);
 
@@ -21,3 +20,10 @@ pub struct Player;
 
 #[derive(Component)]
 pub struct Wall;
+
+#[derive(Debug, Clone, Copy, Component)]
+pub enum PlayerClass {
+    Warrior,
+    Mage,
+    Ranger,
+}

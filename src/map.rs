@@ -15,8 +15,6 @@ pub struct Room {
     pub inner: Rect,  // Carved room within bounds
 }
 
-
-
 impl Rect {
     pub fn center(&self) -> (i32, i32) {
         (self.x + self.width / 2, self.y + self.height / 2)

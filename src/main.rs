@@ -1,20 +1,15 @@
-use std::collections::HashSet;
-
-use bevy::render::view::RenderLayers;
-use bevy::{
-    color::palettes::css::{self, BLACK},
-    prelude::*,
-};
-use rand::Rng;
+use bevy::{color::palettes::css::BLACK, prelude::*};
 
 use crate::components::*;
-use crate::game::{GamePlugin};
+use crate::game::GamePlugin;
 use crate::menu::MenuPlugin;
+use crate::minimap::MinimapPlugin;
 
-mod menu;
-mod map;
-mod game;
 mod components;
+mod game;
+mod map;
+mod minimap;
+mod menu;
 
 pub const MINIMAP_LAYER: usize = 1;
 pub const MAP_WIDTH: usize = 64;
@@ -22,7 +17,7 @@ pub const MAP_HEIGHT: usize = 64;
 
 pub const FLOOR_TILE_INDEX: usize = 119;
 pub const WALL_VERTICAL_INDEX: usize = 17; // e.g. │ sprite
-pub const  WALL_HORIZONTAL_INDEX: usize = 18; // e.g. ─ sprite
+pub const WALL_HORIZONTAL_INDEX: usize = 18; // e.g. ─ sprite
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
 pub enum AppState {
@@ -31,12 +26,7 @@ pub enum AppState {
     InGame,
 }
 
-#[derive(Debug, Clone, Copy, Component)]
-pub enum PlayerClass {
-    Warrior,
-    Mage,
-    Ranger,
-}
+
 
 #[derive(Resource)]
 pub struct SelectedClass(pub Option<PlayerClass>);
@@ -46,7 +36,8 @@ fn main() {
         .add_plugins((
             DefaultPlugins.set(ImagePlugin::default_nearest()),
             MenuPlugin,
-            GamePlugin
+            GamePlugin,
+            MinimapPlugin,
         ))
         .insert_resource(ClearColor(BLACK.into()))
         .insert_resource(SelectedClass(None))
@@ -54,29 +45,12 @@ fn main() {
         .run();
 }
 
-
-
 fn setup(mut commands: Commands) {
     commands.spawn((
         Camera2dBundle::default(),
         CameraFollow,
-        RenderLayers::layer(0), // Main layer only
-    ));
-
-    commands.spawn((
-        Camera2dBundle {
-            camera: Camera {
-                order: 1, // draw after main world camera
-                ..default()
-            },
-            transform: Transform::from_translation(Vec3::new(0.0, 0.0, 1000.0)),
-            ..default()
-        },
-        RenderLayers::layer(MINIMAP_LAYER),
     ));
 }
-
-
 
 fn spawn_floor_tile(
     commands: &mut Commands,

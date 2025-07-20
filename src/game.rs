@@ -1,27 +1,28 @@
 use std::collections::HashSet;
 
-use bevy::{color::palettes::css, prelude::*, render::view::RenderLayers};
+use bevy::prelude::*;
 use rand::Rng;
 
-
-
-use crate::{components::*, map::{bsp_split, Rect, Room}, spawn_floor_tile, spawn_wall_tile, AppState, PlayerClass, SelectedClass, FLOOR_TILE_INDEX, MAP_HEIGHT, MAP_WIDTH, MINIMAP_LAYER, WALL_HORIZONTAL_INDEX}; 
+use crate::{
+    components::*, map::{bsp_split, Rect, Room}, minimap::{ spawn_minimap_ui_tiles}, spawn_floor_tile, spawn_wall_tile, AppState, PlayerClass, SelectedClass, FLOOR_TILE_INDEX, MAP_HEIGHT, MAP_WIDTH, MINIMAP_LAYER
+};
 
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppState::InGame), setup_game)
-           .add_systems(
-               Update,
-               (player_movement, update_minimap_highlight, camera_follow_system)
-                   .chain()
-                   .run_if(in_state(AppState::InGame))
-           );
+            .add_systems(
+                Update,
+                (
+                    player_movement,
+                    camera_follow_system,
+                )
+                    .chain()
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
 }
-
-
 
 fn setup_game(
     mut commands: Commands,
@@ -147,39 +148,8 @@ fn setup_game(
         }
     }
 
-    let minimap_tile_size = 4.0;
-    let minimap_offset = Vec2::new(
-        -(MAP_WIDTH as f32 * minimap_tile_size) / 2.0,
-        -(MAP_HEIGHT as f32 * minimap_tile_size) / 2.0,
-    );
+    spawn_minimap_ui_tiles(&mut commands, &asset_server, &rooms);
 
-    for room in &rooms {
-        for y in room.inner.y..room.inner.y + room.inner.height {
-            for x in room.inner.x..room.inner.x + room.inner.width {
-                let minimap_pos = Vec3::new(
-                    x as f32 * minimap_tile_size + minimap_offset.x,
-                    y as f32 * minimap_tile_size + minimap_offset.y,
-                    10.0, // Render on top
-                );
-
-                commands.spawn((
-                    SpriteBundle {
-                        sprite: Sprite {
-                            color: css::DARK_GRAY.into(),
-                            custom_size: Some(Vec2::splat(minimap_tile_size)),
-                            ..default()
-                        },
-                        transform: Transform::from_translation(minimap_pos),
-                        ..default()
-                    },
-                    RoomId(room.id),
-                    MinimapTile,
-                    Position { x, y },
-                    RenderLayers::layer(MINIMAP_LAYER),
-                ));
-            }
-        }
-    }
     // Spawn player in center of first room
     if let Some(class) = selected_class.0 {
         let texture = asset_server.load("rogues.png");
@@ -276,35 +246,6 @@ fn player_movement(
             new_pos.y as f32 * minimap_tile_size + minimap_offset.y,
             11.0,
         );
-    }
-}
-
-
-fn update_minimap_highlight(
-    player_query: Query<&Position, With<Player>>,
-    floor_query: Query<(&Position, &RoomId)>,
-    mut minimap_tiles: Query<(&RoomId, &mut Sprite), With<MinimapTile>>,
-) {
-    let Ok(player_pos) = player_query.get_single() else {
-        return;
-    };
-
-    // Find the player's current room
-    let mut current_room_id = None;
-    for (pos, room_id) in floor_query.iter() {
-        if pos == player_pos {
-            current_room_id = Some(*room_id);
-            break;
-        }
-    }
-
-    // Highlight tiles in the same room, reset others
-    for (room_id, mut sprite) in &mut minimap_tiles {
-        if Some(*room_id) == current_room_id {
-            sprite.color = css::YELLOW.into(); // highlighted color
-        } else {
-            sprite.color = css::DARK_GRAY.into(); // default color
-        }
     }
 }
 
